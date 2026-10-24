@@ -83,7 +83,7 @@ namespace aead
 			[[nodiscard]] auto finish( ) noexcept -> tag_t;
 
 		private:
-			detail::poly_state_t state { };
+			detail::poly_state_t state;
 		};
 
 		[[nodiscard]] auto mac( std::span< const std::uint8_t > message, const key_t& one_time_key ) noexcept -> tag_t;

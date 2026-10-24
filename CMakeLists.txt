@@ -12,6 +12,7 @@ enable_testing( )
 
 option( CHACHA20_POLY1305_BUILD_TESTS "Build the rfc 8439 test suite" ON )
 option( CHACHA20_POLY1305_BUILD_BENCH "Build the benchmark tool" OFF )
+option( CHACHA20_POLY1305_BENCH_EXTERNAL "Benchmark against openssl and libsodium when they are found ( benchmark only, the library itself never links them )" OFF )
 option( CHACHA20_POLY1305_MSVC_SIMD_ARCH "Compile the simd unit with /arch:AVX2 on MSVC x64 (codegen quality only; intrinsics emit their instructions either way)" ON )
 
 if( MSVC AND CHACHA20_POLY1305_MSVC_SIMD_ARCH AND CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64|i[3-6]86" )

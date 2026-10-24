@@ -30,8 +30,8 @@ namespace aead
 			std::uint32_t r[ 5 ] { };
 			std::uint32_t s[ 4 ] { };
 
-			alignas( 64 ) std::uint32_t powers[ 4 ][ 5 ] { };
-			alignas( 64 ) std::uint8_t buffer[ 64 ] { };
+			alignas( 64 ) std::uint32_t powers[ 8 ][ 5 ];
+			alignas( 64 ) std::uint8_t buffer[ 64 ];
 
 			std::size_t buffered { };
 
@@ -84,7 +84,7 @@ namespace aead
 		auto chacha_sse2( std::uint8_t* destination, const std::uint8_t* source, std::size_t length, const std::uint8_t* key, const std::uint8_t* nonce, std::uint32_t counter ) noexcept -> void;
 		auto chacha_avx2( std::uint8_t* destination, const std::uint8_t* source, std::size_t length, const std::uint8_t* key, const std::uint8_t* nonce, std::uint32_t counter ) noexcept -> void;
 		auto probe_avx2( ) -> bool;
-		auto poly_blocks_avx2( std::uint32_t ( &h )[ 5 ], const std::uint32_t ( &powers )[ 4 ][ 5 ], const std::uint8_t* message, std::size_t n64 ) noexcept -> void;
+		auto poly_blocks_avx2( std::uint32_t ( &h )[ 5 ], const std::uint32_t ( &powers )[ 8 ][ 5 ], const std::uint8_t* message, std::size_t n64 ) noexcept -> void;
 	#if defined( CCP_AVX512_ENABLED )
 		auto chacha_avx512( std::uint8_t* destination, const std::uint8_t* source, std::size_t length, const std::uint8_t* key, const std::uint8_t* nonce, std::uint32_t counter ) noexcept -> void;
 		auto probe_avx512f( ) -> bool;

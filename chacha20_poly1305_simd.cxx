@@ -447,78 +447,91 @@ namespace aead
 		}
 
 		CCP_TARGET( "avx2" )
-		auto poly_blocks_avx2( std::uint32_t ( &h )[ 5 ], const std::uint32_t ( &powers )[ 4 ][ 5 ], const std::uint8_t* message, std::size_t n64 ) noexcept -> void
+		inline auto poly_accumulate_avx2( const std::uint32_t ( &h )[ 5 ], __m256i ( &d )[ 5 ], const __m256i ( &v_pow )[ 5 ], const __m256i ( &v_pow_x5 )[ 5 ], const std::uint8_t* chunk, bool fold_h ) noexcept -> void
+		{
+			std::uint32_t m[ 4 ][ 5 ];
+
+			for ( unsigned blk = 0; blk < 4; ++blk )
+			{
+				const std::uint8_t* p  = chunk + blk * 16;
+				const std::uint32_t b0 = load_le32( p );
+				const std::uint32_t b1 = load_le32( p + 4 );
+				const std::uint32_t b2 = load_le32( p + 8 );
+				const std::uint32_t b3 = load_le32( p + 12 );
+
+				m[ blk ][ 0 ] = b0 & limb_mask;
+				m[ blk ][ 1 ] = ( ( b0 >> 26 ) | ( b1 << 6 ) ) & limb_mask;
+				m[ blk ][ 2 ] = ( ( b1 >> 20 ) | ( b2 << 12 ) ) & limb_mask;
+				m[ blk ][ 3 ] = ( ( b2 >> 14 ) | ( b3 << 18 ) ) & limb_mask;
+				m[ blk ][ 4 ] = ( b3 >> 8 ) | ( 1u << 24 );
+			}
+
+			__m256i v_m[ 5 ];
+			for ( unsigned limb = 0; limb < 5; ++limb )
+			{
+				const __m128i lo = _mm_set_epi32( static_cast< int >( m[ 3 ][ limb ] ), static_cast< int >( m[ 2 ][ limb ] ), static_cast< int >( m[ 1 ][ limb ] ), static_cast< int >( m[ 0 ][ limb ] + ( fold_h ? h[ limb ] : 0 ) ) );
+				v_m[ limb ]		 = _mm256_cvtepu32_epi64( lo );
+			}
+
+			d[ 0 ] = _mm256_add_epi64( d[ 0 ], _mm256_mul_epu32( v_m[ 0 ], v_pow[ 0 ] ) );
+			d[ 0 ] = _mm256_add_epi64( d[ 0 ], _mm256_mul_epu32( v_m[ 1 ], v_pow_x5[ 4 ] ) );
+			d[ 0 ] = _mm256_add_epi64( d[ 0 ], _mm256_mul_epu32( v_m[ 2 ], v_pow_x5[ 3 ] ) );
+			d[ 0 ] = _mm256_add_epi64( d[ 0 ], _mm256_mul_epu32( v_m[ 3 ], v_pow_x5[ 2 ] ) );
+			d[ 0 ] = _mm256_add_epi64( d[ 0 ], _mm256_mul_epu32( v_m[ 4 ], v_pow_x5[ 1 ] ) );
+
+			d[ 1 ] = _mm256_add_epi64( d[ 1 ], _mm256_mul_epu32( v_m[ 0 ], v_pow[ 1 ] ) );
+			d[ 1 ] = _mm256_add_epi64( d[ 1 ], _mm256_mul_epu32( v_m[ 1 ], v_pow[ 0 ] ) );
+			d[ 1 ] = _mm256_add_epi64( d[ 1 ], _mm256_mul_epu32( v_m[ 2 ], v_pow_x5[ 4 ] ) );
+			d[ 1 ] = _mm256_add_epi64( d[ 1 ], _mm256_mul_epu32( v_m[ 3 ], v_pow_x5[ 3 ] ) );
+			d[ 1 ] = _mm256_add_epi64( d[ 1 ], _mm256_mul_epu32( v_m[ 4 ], v_pow_x5[ 2 ] ) );
+
+			d[ 2 ] = _mm256_add_epi64( d[ 2 ], _mm256_mul_epu32( v_m[ 0 ], v_pow[ 2 ] ) );
+			d[ 2 ] = _mm256_add_epi64( d[ 2 ], _mm256_mul_epu32( v_m[ 1 ], v_pow[ 1 ] ) );
+			d[ 2 ] = _mm256_add_epi64( d[ 2 ], _mm256_mul_epu32( v_m[ 2 ], v_pow[ 0 ] ) );
+			d[ 2 ] = _mm256_add_epi64( d[ 2 ], _mm256_mul_epu32( v_m[ 3 ], v_pow_x5[ 4 ] ) );
+			d[ 2 ] = _mm256_add_epi64( d[ 2 ], _mm256_mul_epu32( v_m[ 4 ], v_pow_x5[ 3 ] ) );
+
+			d[ 3 ] = _mm256_add_epi64( d[ 3 ], _mm256_mul_epu32( v_m[ 0 ], v_pow[ 3 ] ) );
+			d[ 3 ] = _mm256_add_epi64( d[ 3 ], _mm256_mul_epu32( v_m[ 1 ], v_pow[ 2 ] ) );
+			d[ 3 ] = _mm256_add_epi64( d[ 3 ], _mm256_mul_epu32( v_m[ 2 ], v_pow[ 1 ] ) );
+			d[ 3 ] = _mm256_add_epi64( d[ 3 ], _mm256_mul_epu32( v_m[ 3 ], v_pow[ 0 ] ) );
+			d[ 3 ] = _mm256_add_epi64( d[ 3 ], _mm256_mul_epu32( v_m[ 4 ], v_pow_x5[ 4 ] ) );
+
+			d[ 4 ] = _mm256_add_epi64( d[ 4 ], _mm256_mul_epu32( v_m[ 0 ], v_pow[ 4 ] ) );
+			d[ 4 ] = _mm256_add_epi64( d[ 4 ], _mm256_mul_epu32( v_m[ 1 ], v_pow[ 3 ] ) );
+			d[ 4 ] = _mm256_add_epi64( d[ 4 ], _mm256_mul_epu32( v_m[ 2 ], v_pow[ 2 ] ) );
+			d[ 4 ] = _mm256_add_epi64( d[ 4 ], _mm256_mul_epu32( v_m[ 3 ], v_pow[ 1 ] ) );
+			d[ 4 ] = _mm256_add_epi64( d[ 4 ], _mm256_mul_epu32( v_m[ 4 ], v_pow[ 0 ] ) );
+		}
+
+		CCP_TARGET( "avx2" )
+		auto poly_blocks_avx2( std::uint32_t ( &h )[ 5 ], const std::uint32_t ( &powers )[ 8 ][ 5 ], const std::uint8_t* message, std::size_t n64 ) noexcept -> void
 		{
 			__m256i v_pow[ 5 ];
 			__m256i v_pow_x5[ 5 ];
+			__m256i v_pow_hi[ 5 ];
+			__m256i v_pow_hi_x5[ 5 ];
 
 			for ( unsigned limb = 0; limb < 5; ++limb )
 			{
-				v_pow[ limb ]	 = _mm256_set_epi64x( powers[ 0 ][ limb ], powers[ 1 ][ limb ], powers[ 2 ][ limb ], powers[ 3 ][ limb ] );
-				v_pow_x5[ limb ] = _mm256_set_epi64x( powers[ 0 ][ limb ] * 5, powers[ 1 ][ limb ] * 5, powers[ 2 ][ limb ] * 5, powers[ 3 ][ limb ] * 5 );
+				v_pow[ limb ]		= _mm256_set_epi64x( powers[ 0 ][ limb ], powers[ 1 ][ limb ], powers[ 2 ][ limb ], powers[ 3 ][ limb ] );
+				v_pow_x5[ limb ]	= _mm256_set_epi64x( powers[ 0 ][ limb ] * 5, powers[ 1 ][ limb ] * 5, powers[ 2 ][ limb ] * 5, powers[ 3 ][ limb ] * 5 );
+				v_pow_hi[ limb ]	= _mm256_set_epi64x( powers[ 4 ][ limb ], powers[ 5 ][ limb ], powers[ 6 ][ limb ], powers[ 7 ][ limb ] );
+				v_pow_hi_x5[ limb ] = _mm256_set_epi64x( powers[ 4 ][ limb ] * 5, powers[ 5 ][ limb ] * 5, powers[ 6 ][ limb ] * 5, powers[ 7 ][ limb ] * 5 );
 			}
 
-			while ( n64-- )
+			while ( n64 >= 2 )
 			{
-				std::uint32_t m[ 4 ][ 5 ];
+				__m256i d[ 5 ] = { _mm256_setzero_si256( ), _mm256_setzero_si256( ), _mm256_setzero_si256( ), _mm256_setzero_si256( ), _mm256_setzero_si256( ) };
 
-				for ( unsigned blk = 0; blk < 4; ++blk )
-				{
-					const std::uint8_t* p  = message + blk * 16;
-					const std::uint32_t b0 = load_le32( p );
-					const std::uint32_t b1 = load_le32( p + 4 );
-					const std::uint32_t b2 = load_le32( p + 8 );
-					const std::uint32_t b3 = load_le32( p + 12 );
+				poly_accumulate_avx2( h, d, v_pow_hi, v_pow_hi_x5, message, true );
+				poly_accumulate_avx2( h, d, v_pow, v_pow_x5, message + 64, false );
 
-					m[ blk ][ 0 ] = b0 & limb_mask;
-					m[ blk ][ 1 ] = ( ( b0 >> 26 ) | ( b1 << 6 ) ) & limb_mask;
-					m[ blk ][ 2 ] = ( ( b1 >> 20 ) | ( b2 << 12 ) ) & limb_mask;
-					m[ blk ][ 3 ] = ( ( b2 >> 14 ) | ( b3 << 18 ) ) & limb_mask;
-					m[ blk ][ 4 ] = ( b3 >> 8 ) | ( 1u << 24 );
-				}
-
-				__m256i v_m[ 5 ];
-				for ( unsigned limb = 0; limb < 5; ++limb )
-				{
-					const __m128i lo = _mm_set_epi32( static_cast< int >( m[ 3 ][ limb ] ), static_cast< int >( m[ 2 ][ limb ] ), static_cast< int >( m[ 1 ][ limb ] ), static_cast< int >( m[ 0 ][ limb ] + h[ limb ] ) );
-					v_m[ limb ]		 = _mm256_cvtepu32_epi64( lo );
-				}
-
-				__m256i d0 = _mm256_mul_epu32( v_m[ 0 ], v_pow[ 0 ] );
-				d0		   = _mm256_add_epi64( d0, _mm256_mul_epu32( v_m[ 1 ], v_pow_x5[ 4 ] ) );
-				d0		   = _mm256_add_epi64( d0, _mm256_mul_epu32( v_m[ 2 ], v_pow_x5[ 3 ] ) );
-				d0		   = _mm256_add_epi64( d0, _mm256_mul_epu32( v_m[ 3 ], v_pow_x5[ 2 ] ) );
-				d0		   = _mm256_add_epi64( d0, _mm256_mul_epu32( v_m[ 4 ], v_pow_x5[ 1 ] ) );
-
-				__m256i d1 = _mm256_mul_epu32( v_m[ 0 ], v_pow[ 1 ] );
-				d1		   = _mm256_add_epi64( d1, _mm256_mul_epu32( v_m[ 1 ], v_pow[ 0 ] ) );
-				d1		   = _mm256_add_epi64( d1, _mm256_mul_epu32( v_m[ 2 ], v_pow_x5[ 4 ] ) );
-				d1		   = _mm256_add_epi64( d1, _mm256_mul_epu32( v_m[ 3 ], v_pow_x5[ 3 ] ) );
-				d1		   = _mm256_add_epi64( d1, _mm256_mul_epu32( v_m[ 4 ], v_pow_x5[ 2 ] ) );
-
-				__m256i d2 = _mm256_mul_epu32( v_m[ 0 ], v_pow[ 2 ] );
-				d2		   = _mm256_add_epi64( d2, _mm256_mul_epu32( v_m[ 1 ], v_pow[ 1 ] ) );
-				d2		   = _mm256_add_epi64( d2, _mm256_mul_epu32( v_m[ 2 ], v_pow[ 0 ] ) );
-				d2		   = _mm256_add_epi64( d2, _mm256_mul_epu32( v_m[ 3 ], v_pow_x5[ 4 ] ) );
-				d2		   = _mm256_add_epi64( d2, _mm256_mul_epu32( v_m[ 4 ], v_pow_x5[ 3 ] ) );
-
-				__m256i d3 = _mm256_mul_epu32( v_m[ 0 ], v_pow[ 3 ] );
-				d3		   = _mm256_add_epi64( d3, _mm256_mul_epu32( v_m[ 1 ], v_pow[ 2 ] ) );
-				d3		   = _mm256_add_epi64( d3, _mm256_mul_epu32( v_m[ 2 ], v_pow[ 1 ] ) );
-				d3		   = _mm256_add_epi64( d3, _mm256_mul_epu32( v_m[ 3 ], v_pow[ 0 ] ) );
-				d3		   = _mm256_add_epi64( d3, _mm256_mul_epu32( v_m[ 4 ], v_pow_x5[ 4 ] ) );
-
-				__m256i d4 = _mm256_mul_epu32( v_m[ 0 ], v_pow[ 4 ] );
-				d4		   = _mm256_add_epi64( d4, _mm256_mul_epu32( v_m[ 1 ], v_pow[ 3 ] ) );
-				d4		   = _mm256_add_epi64( d4, _mm256_mul_epu32( v_m[ 2 ], v_pow[ 2 ] ) );
-				d4		   = _mm256_add_epi64( d4, _mm256_mul_epu32( v_m[ 3 ], v_pow[ 1 ] ) );
-				d4		   = _mm256_add_epi64( d4, _mm256_mul_epu32( v_m[ 4 ], v_pow[ 0 ] ) );
-
-				std::uint64_t e0 = hsum4_avx2( d0 );
-				std::uint64_t e1 = hsum4_avx2( d1 );
-				std::uint64_t e2 = hsum4_avx2( d2 );
-				std::uint64_t e3 = hsum4_avx2( d3 );
-				std::uint64_t e4 = hsum4_avx2( d4 );
+				std::uint64_t e0 = hsum4_avx2( d[ 0 ] );
+				std::uint64_t e1 = hsum4_avx2( d[ 1 ] );
+				std::uint64_t e2 = hsum4_avx2( d[ 2 ] );
+				std::uint64_t e3 = hsum4_avx2( d[ 3 ] );
+				std::uint64_t e4 = hsum4_avx2( d[ 4 ] );
 
 				std::uint64_t c;
 				c = e0 >> 26;
@@ -552,7 +565,53 @@ namespace aead
 				h[ 3 ] = static_cast< std::uint32_t >( e3 );
 				h[ 4 ] = static_cast< std::uint32_t >( e4 );
 
-				message += 64;
+				message += 128;
+				n64 -= 2;
+			}
+
+			if ( n64-- )
+			{
+				__m256i d[ 5 ] = { _mm256_setzero_si256( ), _mm256_setzero_si256( ), _mm256_setzero_si256( ), _mm256_setzero_si256( ), _mm256_setzero_si256( ) };
+
+				poly_accumulate_avx2( h, d, v_pow, v_pow_x5, message, true );
+
+				std::uint64_t e0 = hsum4_avx2( d[ 0 ] );
+				std::uint64_t e1 = hsum4_avx2( d[ 1 ] );
+				std::uint64_t e2 = hsum4_avx2( d[ 2 ] );
+				std::uint64_t e3 = hsum4_avx2( d[ 3 ] );
+				std::uint64_t e4 = hsum4_avx2( d[ 4 ] );
+
+				std::uint64_t c;
+				c = e0 >> 26;
+
+				e0 &= limb_mask;
+				e1 += c;
+				c = e1 >> 26;
+
+				e1 &= limb_mask;
+				e2 += c;
+				c = e2 >> 26;
+
+				e2 &= limb_mask;
+				e3 += c;
+				c = e3 >> 26;
+
+				e3 &= limb_mask;
+				e4 += c;
+				c = e4 >> 26;
+
+				e4 &= limb_mask;
+				e0 += c * 5;
+				c = e0 >> 26;
+
+				e0 &= limb_mask;
+				e1 += c;
+
+				h[ 0 ] = static_cast< std::uint32_t >( e0 );
+				h[ 1 ] = static_cast< std::uint32_t >( e1 );
+				h[ 2 ] = static_cast< std::uint32_t >( e2 );
+				h[ 3 ] = static_cast< std::uint32_t >( e3 );
+				h[ 4 ] = static_cast< std::uint32_t >( e4 );
 			}
 		}
 	}
@@ -626,7 +685,10 @@ namespace aead
 				for ( unsigned idx = 0; idx < 16; ++idx )
 					v[ idx ] = vdupq_n_u32( state[ idx ] );
 
-				v[ 12 ] = uint32x4_t { state[ 12 ], state[ 12 ] + 1, state[ 12 ] + 2, state[ 12 ] + 3 };
+				v[ 12 ] = vdupq_n_u32( state[ 12 ] );
+				v[ 12 ] = vsetq_lane_u32( state[ 12 ] + 1, v[ 12 ], 1 );
+				v[ 12 ] = vsetq_lane_u32( state[ 12 ] + 2, v[ 12 ], 2 );
+				v[ 12 ] = vsetq_lane_u32( state[ 12 ] + 3, v[ 12 ], 3 );
 
 				for ( int round = 0; round < 10; ++round )
 				{
@@ -646,7 +708,11 @@ namespace aead
 						v[ idx ] = vaddq_u32( v[ idx ], vdupq_n_u32( state[ idx ] ) );
 				}
 
-				v[ 12 ] = vaddq_u32( v[ 12 ], uint32x4_t { state[ 12 ], state[ 12 ] + 1, state[ 12 ] + 2, state[ 12 ] + 3 } );
+				auto ctr = vdupq_n_u32( state[ 12 ] );
+				ctr		 = vsetq_lane_u32( state[ 12 ] + 1, ctr, 1 );
+				ctr		 = vsetq_lane_u32( state[ 12 ] + 2, ctr, 2 );
+				ctr		 = vsetq_lane_u32( state[ 12 ] + 3, ctr, 3 );
+				v[ 12 ]	 = vaddq_u32( v[ 12 ], ctr );
 
 				for ( unsigned row = 0; row < 4; ++row )
 				{

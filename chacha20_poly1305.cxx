@@ -7,9 +7,9 @@ namespace aead
 {
 	namespace detail
 	{
-		auto secure_zero( void* ptr, std::size_t length ) noexcept -> void
+		auto secure_zero( void* pointer, std::size_t length ) noexcept -> void
 		{
-			auto* bytes = static_cast< volatile std::uint8_t* >( ptr );
+			auto* bytes = static_cast< volatile std::uint8_t* >( pointer );
 			while ( length >= 8 )
 			{
 				*reinterpret_cast< volatile std::uint64_t* >( bytes ) = 0;
@@ -163,19 +163,24 @@ namespace aead
 			std::uint64_t c;
 			c		 = d0 >> 26;
 			out[ 0 ] = static_cast< std::uint32_t >( d0 ) & limb_mask;
+
 			d1 += c;
 			c		 = d1 >> 26;
 			out[ 1 ] = static_cast< std::uint32_t >( d1 ) & limb_mask;
+
 			d2 += c;
 			c		 = d2 >> 26;
 			out[ 2 ] = static_cast< std::uint32_t >( d2 ) & limb_mask;
+
 			d3 += c;
 			c		 = d3 >> 26;
 			out[ 3 ] = static_cast< std::uint32_t >( d3 ) & limb_mask;
 			d4 += c;
+
 			c		 = d4 >> 26;
 			out[ 4 ] = static_cast< std::uint32_t >( d4 ) & limb_mask;
 			out[ 0 ] += static_cast< std::uint32_t >( c ) * 5;
+
 			c = out[ 0 ] >> 26;
 			out[ 0 ] &= limb_mask;
 			out[ 1 ] += static_cast< std::uint32_t >( c );
@@ -359,6 +364,7 @@ namespace aead
 
 		auto poly_blocks( poly_state_t& st, const std::uint8_t* message, std::size_t n64 ) noexcept -> void
 		{
+#if defined( CCP_X86_SIMD )
 			if ( st.use_avx2 && n64 >= 3 )
 			{
 				if ( !st.powers_ready )
@@ -366,17 +372,17 @@ namespace aead
 					for ( unsigned limb = 0; limb < 5; ++limb )
 						st.powers[ 0 ][ limb ] = st.r[ limb ];
 
-					poly_mul_reduce( st.powers[ 1 ], st.powers[ 0 ], st.r );
-					poly_mul_reduce( st.powers[ 2 ], st.powers[ 1 ], st.r );
-					poly_mul_reduce( st.powers[ 3 ], st.powers[ 2 ], st.r );
+					for ( unsigned idx = 1; idx < 8; ++idx )
+						poly_mul_reduce( st.powers[ idx ], st.powers[ idx - 1 ], st.r );
 
 					st.powers_ready = true;
 				}
 
 				poly_blocks_avx2( st.h, st.powers, message, n64 );
+				return;
 			}
-			else
-				poly_blocks_scalar( st.h, st.r, message, n64 );
+#endif
+			poly_blocks_scalar( st.h, st.r, message, n64 );
 		}
 
 		auto poly_absorb( poly_state_t& st, const std::uint8_t* data, std::size_t length ) noexcept -> void
@@ -532,10 +538,12 @@ namespace aead
 
 	namespace
 	{
+		alignas( 64 ) constexpr std::uint8_t zeros[ 64 ] { };
+		constexpr std::uint8_t pad[ 16 ] { };
+
 		auto mac_aead_input( const std::uint8_t* otk, std::span< const std::uint8_t > aad, std::span< const std::uint8_t > data, std::size_t data_length ) noexcept -> tag_t
 		{
 			poly1305::state_t state( key_t::from_span( std::span< const std::uint8_t >( otk, 32 ) ) );
-			const std::uint8_t pad[ 16 ] { };
 
 			state.absorb( aad );
 			state.absorb( std::span< const std::uint8_t >( pad ).first( detail::pad16( aad.size( ) ) ) );
@@ -556,8 +564,7 @@ namespace aead
 	{
 		const auto stream = detail::resolve_chacha( );
 
-		std::uint8_t otk_block[ 64 ] { };
-		const std::uint8_t zeros[ 64 ] { };
+		alignas( 64 ) std::uint8_t otk_block[ 64 ];
 
 		stream( otk_block, zeros, 64, key.bytes.data( ), nonce.bytes.data( ), 0 );
 		stream( cipher.data( ), plain.data( ), plain.size( ), key.bytes.data( ), nonce.bytes.data( ), 1 );
@@ -572,8 +579,7 @@ namespace aead
 	{
 		const auto stream = detail::resolve_chacha( );
 
-		std::uint8_t otk_block[ 64 ] { };
-		const std::uint8_t zeros[ 64 ] { };
+		alignas( 64 ) std::uint8_t otk_block[ 64 ];
 
 		stream( otk_block, zeros, 64, key.bytes.data( ), nonce.bytes.data( ), 0 );
 
