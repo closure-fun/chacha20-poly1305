@@ -13,18 +13,33 @@ the extended-precision-integers dependency is gone, poly1305 now uses 5x26-bit l
 
 # Benchmarks
 
-measured on the same machine and compiler ( clang 22, `-O2` ) against [tinychacha](https://github.com/gibme-c/tinychacha) with its own `bench_all` tool, both libraries dispatching to their AVX2 backends ( AVX-512 unavailable on this cpu ):
+everything below is throughput in MiB/s ( megabytes of input processed per second ), higher is better. all three libraries were compiled with the same compiler ( clang 22, `-O2` ) and run on the same machine, each picking its fastest available backend ( AVX2 here, this cpu has no AVX-512 ):
 
-| size | chacha20 | poly1305 | aead encrypt |
+- **this library** - the one in this repo
+- **tinychacha** - [gibme-c/tinychacha](https://github.com/gibme-c/tinychacha), run with its own `bench_all` tool
+- **original fork** - this repo before the rewrite, scalar chacha20 and a 320-bit bigint poly1305
+
+## aead encrypt ( encrypt + authenticate one message )
+
+| message size | this library | tinychacha | original fork |
 | --- | --- | --- | --- |
-| 64B | 669 vs 502 MiB/s | 1287 vs 990 MiB/s | 211 vs 105 MiB/s |
-| 256B | 1539 vs 536 MiB/s | 1973 vs 1452 MiB/s | 552 vs 235 MiB/s |
-| 1KiB | 3668 vs 551 MiB/s | 3431 vs 1603 MiB/s | 1366 vs 338 MiB/s |
-| 4KiB | 3755 vs 552 MiB/s | 4158 vs 1708 MiB/s | 1819 vs 383 MiB/s |
-| 64KiB | 3791 vs 552 MiB/s | 4458 vs 1709 MiB/s | 2037 vs 277 MiB/s |
-| 1MiB | 3724 vs 590 MiB/s | 4467 vs 1721 MiB/s | 2034 vs 302 MiB/s |
+| 64B | 212 | 105 | 3.9 |
+| 256B | 559 | 235 | 5.0 |
+| 1KiB | 1,385 | 338 | 5.5 |
+| 4KiB | 1,824 | 383 | 5.4 |
+| 64KiB | 2,064 | 277 | 5.5 |
+| 1MiB | 2,053 | 302 | 5.5 |
 
-run your own with `-DCHACHA20_POLY1305_BUILD_BENCH=ON`.
+about **2x faster than tinychacha** on small packets and **7x** on large ones, and roughly **370x faster than the original fork** ( its bigint poly1305 capped everything at ~5.5 MiB/s ).
+
+## raw cipher speed ( 1 MiB messages )
+
+| primitive | this library | tinychacha | original fork |
+| --- | --- | --- | --- |
+| chacha20 | 3,763 | 590 | 653 |
+| poly1305 | 4,509 | 1,721 | 5.6 |
+
+run your own numbers with `-DCHACHA20_POLY1305_BUILD_BENCH=ON`.
 
 -----
 
@@ -89,4 +104,4 @@ options:
 | `CCP_DISABLE_SIMD` | undefined | define to force the portable backend |
 | `CCP_DISABLE_AVX512` | undefined | define to drop the AVX-512 backend |
 
-all test vectors from RFC 8439 ( block function, encryption, poly1305 mac, key generation, aead 2.8.2 and A.5, the full A.3 set ) run against every backend the cpu supports, plus backend equivalengthce over odd sizes, streaming equivalengthce, in place roundtrips and tamper rejection.
+all test vectors from RFC 8439 ( block function, encryption, poly1305 mac, key generation, aead 2.8.2 and A.5, the full A.3 set ) run against every backend the cpu supports, plus backend equivalence over odd sizes, streaming equivalence, in place roundtrips and tamper rejection.
