@@ -7,72 +7,31 @@ on:
     branches: [ main ]
 
 jobs:
+  tests:
 
-  static-lib-clang:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
 
-    runs-on: ubuntu-latest
-    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - { name: linux-gcc,     os: ubuntu-latest,   cxx: g++ }
+        - { name: linux-clang,   os: ubuntu-latest,   cxx: clang++ }
+        - { name: windows-msvc,  os: windows-latest,  cxx: cl,       extra: "" }
+        - { name: windows-clang, os: windows-latest,  cxx: clang-cl, extra: "-T ClangCL" }
+        - { name: macos-clang,   os: macos-latest,    cxx: clang++ }
+
     steps:
-      
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
-    - name: get updated submodules
-      run: git submodule update --init --recursive
-    
-    - name: build and compile the static library.
-      run: make -f staticlib CXX=clang++
+    - name: configure
+      run: cmake -S . -B build -DCHACHA20_POLY1305_BUILD_BENCH=ON -DCMAKE_BUILD_TYPE=Release ${{ matrix.extra }}
+      env:
+        CXX: ${{ matrix.cxx }}
 
-    - name: run the tests for the static library.
-      run: make -f staticlib static_test CXX=clang++
+    - name: build
+      run: cmake --build build --config Release
 
-    - name: clean test executables
-      run: make clean
-
-    - name: install the static library.
-      run: sudo make -f staticlib install CXX=clang++
-
-    - name: compile the static sample program for the library.
-      run: clang++ -std=c++20 static-build.cpp -o static-build.out -lchacha20 -fsanitize=address
-
-    - name: run the sample program for the library.
-      run: ./static-build.out
-
-    - name: uninstall the static library.
-      run: sudo make -f staticlib uninstall
-
-    - name: cleanup
-      run: make -f staticlib cleanup
-
-  static-lib-gcc:
-
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v3
-
-    - name: get updated submodules
-      run: git submodule update --init --recursive
-    
-    - name: build and compile the static library.
-      run: make -f staticlib
-
-    - name: run the tests for the static library.
-      run: make -f staticlib static_test
-
-    - name: clean test executables
-      run: make clean
-
-    - name: install the static library.
-      run: sudo make -f staticlib install
-
-    - name: compile the static sample program for the library.
-      run: g++ -std=c++20 static-build.cpp -o static-build.out -lchacha20 -fsanitize=address
-
-    - name: run the sample program for the library.
-      run: ./static-build.out
-
-    - name: uninstall the static library.
-      run: sudo make -f staticlib uninstall
-
-    - name: cleanup
-      run: make -f staticlib cleanup
+    - name: test
+      run: ctest --test-dir build --build-config Release --output-on-failure
