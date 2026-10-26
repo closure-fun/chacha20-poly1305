@@ -6,7 +6,6 @@ add_library( chacha20_poly1305 chacha20_poly1305.cxx simd.cxx )
 add_library( chacha20_poly1305::chacha20_poly1305 ALIAS chacha20_poly1305 )
 
 target_include_directories( chacha20_poly1305 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" )
-# c++23 upgrades the convenience api from std::optional to std::expected, everything else is c++20
 target_compile_features( chacha20_poly1305 PUBLIC cxx_std_20 )
 
 enable_testing( )
