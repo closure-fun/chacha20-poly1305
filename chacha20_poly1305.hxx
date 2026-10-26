@@ -1,13 +1,20 @@
 #ifndef CHACHA20_POLY1305_HXX
 #define CHACHA20_POLY1305_HXX
 
-#include "chacha20_poly1305_detail.hxx"
+#include "detail.hxx"
 
 #include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
+#include <version>
+
+#if __cplusplus >= 202302L || ( defined( _MSVC_LANG ) && _MSVC_LANG >= 202302L )
+	#define CCP_HAS_EXPECTED 1
+	#include <expected>
+#else
+	#include <optional>
+#endif
 #include <span>
 #include <vector>
 
@@ -99,8 +106,51 @@ namespace aead
 	[[nodiscard]] auto encrypt( std::span< std::uint8_t > cipher, std::span< const std::uint8_t > plain, std::span< const std::uint8_t > aad, const key_t& key, const nonce_t& nonce ) noexcept -> tag_t;
 	[[nodiscard]] auto decrypt( std::span< std::uint8_t > plain_out, std::span< const std::uint8_t > cipher, std::span< const std::uint8_t > aad, const key_t& key, const nonce_t& nonce, const tag_t& tag ) noexcept -> bool;
 
-	[[nodiscard]] auto encrypt( std::span< const std::uint8_t > plain, std::span< const std::uint8_t > aad, const key_t& key, const nonce_t& nonce ) -> std::expected< std::vector< std::uint8_t >, error_t >;
-	[[nodiscard]] auto decrypt( std::span< const std::uint8_t > cipher_and_tag, std::span< const std::uint8_t > aad, const key_t& key, const nonce_t& nonce ) -> std::expected< std::vector< std::uint8_t >, error_t >;
+#if defined( CCP_HAS_EXPECTED )
+	[[nodiscard]] inline auto encrypt( std::span< const std::uint8_t > plain, std::span< const std::uint8_t > aad, const key_t& key, const nonce_t& nonce ) -> std::expected< std::vector< std::uint8_t >, error_t >
+	{
+		if ( plain.size( ) / 64 + 1 > 0xfffffffeu )
+			return std::unexpected( error_t::invalid_size );
+		std::vector< std::uint8_t > out( plain.size( ) + 16 );
+		const auto tag = encrypt( std::span< std::uint8_t >( out ).first( plain.size( ) ), plain, aad, key, nonce );
+		std::memcpy( out.data( ) + plain.size( ), tag.bytes.data( ), 16 );
+		return out;
+	}
+	[[nodiscard]] inline auto decrypt( std::span< const std::uint8_t > cipher_and_tag, std::span< const std::uint8_t > aad, const key_t& key, const nonce_t& nonce ) -> std::expected< std::vector< std::uint8_t >, error_t >
+	{
+		if ( cipher_and_tag.size( ) < 16 )
+			return std::unexpected( error_t::invalid_size );
+		const auto cipher_len = cipher_and_tag.size( ) - 16;
+		if ( cipher_len / 64 + 1 > 0xfffffffeu )
+			return std::unexpected( error_t::invalid_size );
+		std::vector< std::uint8_t > out( cipher_len );
+		if ( !decrypt( out, cipher_and_tag.first( cipher_len ), aad, key, nonce, tag_t::from_span( cipher_and_tag.subspan( cipher_len ) ) ) )
+			return std::unexpected( error_t::auth_failed );
+		return out;
+	}
+#else
+	[[nodiscard]] inline auto encrypt( std::span< const std::uint8_t > plain, std::span< const std::uint8_t > aad, const key_t& key, const nonce_t& nonce ) -> std::optional< std::vector< std::uint8_t > >
+	{
+		if ( plain.size( ) / 64 + 1 > 0xfffffffeu )
+			return std::nullopt;
+		std::vector< std::uint8_t > out( plain.size( ) + 16 );
+		const auto tag = encrypt( std::span< std::uint8_t >( out ).first( plain.size( ) ), plain, aad, key, nonce );
+		std::memcpy( out.data( ) + plain.size( ), tag.bytes.data( ), 16 );
+		return out;
+	}
+	[[nodiscard]] inline auto decrypt( std::span< const std::uint8_t > cipher_and_tag, std::span< const std::uint8_t > aad, const key_t& key, const nonce_t& nonce ) -> std::optional< std::vector< std::uint8_t > >
+	{
+		if ( cipher_and_tag.size( ) < 16 )
+			return std::nullopt;
+		const auto cipher_len = cipher_and_tag.size( ) - 16;
+		if ( cipher_len / 64 + 1 > 0xfffffffeu )
+			return std::nullopt;
+		std::vector< std::uint8_t > out( cipher_len );
+		if ( !decrypt( out, cipher_and_tag.first( cipher_len ), aad, key, nonce, tag_t::from_span( cipher_and_tag.subspan( cipher_len ) ) ) )
+			return std::nullopt;
+		return out;
+	}
+#endif
 }
 
 #endif

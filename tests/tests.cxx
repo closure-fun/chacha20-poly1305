@@ -1,5 +1,5 @@
 #include "chacha20_poly1305.hxx"
-#include "chacha20_poly1305_detail.hxx"
+#include "detail.hxx"
 
 #include <array>
 #include <cstdio>
@@ -421,6 +421,108 @@ auto main( ) -> int
 		corrupt[ 7 ] ^= 4;
 		all = all && !aead::decrypt( corrupt, aad, key, nonce ).has_value( );
 		check( "aead expected/vector convenience api", all );
+	}
+	{
+		const auto key	 = aead::key_t::from_span( random_bytes( 32 ) );
+		const auto nonce = aead::nonce_t::from_span( random_bytes( 12 ) );
+		const auto aad	 = random_bytes( 12 );
+		const auto plain = random_bytes( 128 );
+
+		std::vector< std::uint8_t > cipher( plain.size( ) );
+		const auto tag = aead::encrypt( cipher, plain, aad, key, nonce );
+
+		bool all_rejected = true;
+		for ( unsigned bit = 0; bit < 128; ++bit )
+		{
+			auto bad_tag = tag;
+			bad_tag.bytes[ bit / 8 ] ^= static_cast< std::uint8_t >( 1u << ( bit % 8 ) );
+			std::vector< std::uint8_t > out( plain.size( ) );
+			if ( aead::decrypt( out, cipher, aad, key, nonce, bad_tag ) )
+				all_rejected = false;
+		}
+
+		for ( unsigned bit = 0; bit < 64; ++bit )
+		{
+			auto bad_cipher = cipher;
+			bad_cipher[ bit / 8 ] ^= static_cast< std::uint8_t >( 1u << ( bit % 8 ) );
+			std::vector< std::uint8_t > out( plain.size( ) );
+			if ( aead::decrypt( out, bad_cipher, aad, key, nonce, tag ) )
+				all_rejected = false;
+		}
+
+		check( "exhaustive tag + ciphertext bit tamper rejection", all_rejected );
+	}
+
+	{
+		const auto key	 = aead::key_t::from_span( random_bytes( 32 ) );
+		const auto nonce = aead::nonce_t::from_span( random_bytes( 12 ) );
+		const auto plain = random_bytes( 130 );
+
+		bool all = true;
+		for ( std::size_t aad_size : std::array< std::size_t, 6 > { 0, 1, 15, 16, 17, 33 } )
+		{
+			const auto aad = random_bytes( aad_size );
+
+			for ( std::size_t len = 0; len < 64; ++len )
+			{
+				std::vector< std::uint8_t > cipher( len );
+				const auto tag = aead::encrypt( cipher, std::span< const std::uint8_t >( plain ).first( len ), aad, key, nonce );
+
+				std::vector< std::uint8_t > out( len );
+				if ( !aead::decrypt( out, cipher, aad, key, nonce, tag ) || !eq( out.data( ), plain.data( ), len ) )
+				{
+					all = false;
+					break;
+				}
+			}
+		}
+		check( "mac framing across every padding residue ( issue 25 )", all );
+	}
+
+	{
+		const auto key	 = aead::key_t::from_span( random_bytes( 32 ) );
+		const auto nonce = aead::nonce_t::from_span( random_bytes( 12 ) );
+		const auto aad	 = random_bytes( 8 );
+
+		std::vector< std::uint8_t > plain( 300 );
+		for ( auto& b : plain )
+			b = static_cast< std::uint8_t >( rng( ) );
+
+		std::vector< std::uint8_t > cipher( plain.size( ) );
+		const auto tag = aead::encrypt( cipher, plain, aad, key, nonce );
+
+		std::vector< std::uint8_t > recovered( plain.size( ) );
+		const bool out_of_place = aead::decrypt( recovered, cipher, aad, key, nonce, tag ) && recovered == plain;
+
+		std::array< std::uint8_t, 300 > fixed_plain { };
+		std::memcpy( fixed_plain.data( ), plain.data( ), plain.size( ) );
+		std::array< std::uint8_t, 300 > fixed_cipher { };
+		const auto tag2 = aead::encrypt( fixed_cipher, fixed_plain, aad, key, nonce );
+
+		std::array< std::uint8_t, 300 > fixed_out { };
+		const bool fixed_ok = aead::decrypt( fixed_out, fixed_cipher, aad, key, nonce, tag2 ) && fixed_out == fixed_plain;
+
+		std::vector< std::uint8_t > working( plain );
+		const auto tag3		= aead::encrypt( working, working, aad, key, nonce );
+		const bool in_place = aead::decrypt( working, working, aad, key, nonce, tag3 ) && working == plain;
+
+		check( "buffer containers + in place workflow ( issue 22 )", out_of_place && fixed_ok && in_place );
+	}
+
+	{
+		const auto tag_a = aead::tag_t::from_span( random_bytes( 16 ) );
+		auto tag_b		 = tag_a;
+
+		bool all = aead::poly1305::verify( tag_a, tag_b );
+
+		for ( std::size_t idx = 0; idx < 16; ++idx )
+		{
+			tag_b.bytes[ idx ] ^= 0xff;
+			all = all && !aead::poly1305::verify( tag_a, tag_b );
+			tag_b.bytes[ idx ] ^= 0xff;
+		}
+
+		check( "poly1305 verify, constant time fold, all positions ( issue 17 )", all );
 	}
 
 	std::printf( "\n%d/%d checks passed\n", total - failed, total );

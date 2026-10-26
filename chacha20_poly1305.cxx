@@ -355,7 +355,7 @@ namespace aead
 			if ( length )
 				poly_absorb_block( h, r, message, length );
 
-			std::uint32_t s[ 4 ] = { load_le32( key + 16 ), load_le32( key + 20 ), load_le32( key + 24 ), load_le32( key + 28 ) };
+			alignas( 8 ) std::uint32_t s[ 4 ] = { load_le32( key + 16 ), load_le32( key + 20 ), load_le32( key + 24 ), load_le32( key + 28 ) };
 			poly_finalize( h, s, tag );
 
 			secure_zero( r, sizeof( r ) );
@@ -550,11 +550,11 @@ namespace aead
 			state.absorb( std::span< const std::uint8_t >( data ).first( data_length ) );
 			state.absorb( std::span< const std::uint8_t >( pad ).first( detail::pad16( data_length ) ) );
 
-			std::uint8_t lengthgths[ 16 ];
-			detail::store_le64( lengthgths, aad.size( ) );
-			detail::store_le64( lengthgths + 8, data_length );
+			std::uint8_t lengths[ 16 ];
+			detail::store_le64( lengths, aad.size( ) );
+			detail::store_le64( lengths + 8, data_length );
 
-			state.absorb( lengthgths );
+			state.absorb( lengths );
 
 			return state.finish( );
 		}
@@ -593,47 +593,4 @@ namespace aead
 		return true;
 	}
 
-	auto encrypt( std::span< const std::uint8_t > plain, std::span< const std::uint8_t > aad, const key_t& key, const nonce_t& nonce ) -> std::expected< std::vector< std::uint8_t >, error_t >
-	{
-		if ( plain.size( ) / 64 + 1 > 0xfffffffeu )
-			return std::unexpected( error_t::invalid_size );
-
-		try
-		{
-			std::vector< std::uint8_t > out( plain.size( ) + 16 );
-
-			const auto tag = encrypt( std::span< std::uint8_t >( out ).first( plain.size( ) ), plain, aad, key, nonce );
-			std::memcpy( out.data( ) + plain.size( ), tag.bytes.data( ), 16 );
-
-			return out;
-		}
-		catch ( const std::bad_alloc& )
-		{
-			return std::unexpected( error_t::invalid_size );
-		}
-	}
-
-	auto decrypt( std::span< const std::uint8_t > cipher_and_tag, std::span< const std::uint8_t > aad, const key_t& key, const nonce_t& nonce ) -> std::expected< std::vector< std::uint8_t >, error_t >
-	{
-		if ( cipher_and_tag.size( ) < 16 )
-			return std::unexpected( error_t::invalid_size );
-
-		const auto lengthgth = cipher_and_tag.size( ) - 16;
-		if ( lengthgth / 64 + 1 > 0xfffffffeu )
-			return std::unexpected( error_t::invalid_size );
-
-		try
-		{
-			std::vector< std::uint8_t > out( lengthgth );
-
-			if ( !decrypt( out, cipher_and_tag.first( lengthgth ), aad, key, nonce, tag_t::from_span( cipher_and_tag.subspan( lengthgth ) ) ) )
-				return std::unexpected( error_t::auth_failed );
-
-			return out;
-		}
-		catch ( const std::bad_alloc& )
-		{
-			return std::unexpected( error_t::invalid_size );
-		}
-	}
 }

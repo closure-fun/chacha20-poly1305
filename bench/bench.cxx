@@ -21,486 +21,471 @@
 	#include <intrin.h>
 #endif
 
-namespace
+constexpr std::size_t reps = 7;
+
+const std::uint8_t bench_key_bytes[ 32 ]   = { 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
+	0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f };
+const std::uint8_t bench_nonce_bytes[ 12 ] = { 0x07, 0x00, 0x00, 0x00, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47 };
+const std::uint8_t bench_aad[ 12 ]		   = { 0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7 };
+
+const auto bench_key   = aead::key_t::from_span( std::span< const std::uint8_t >( bench_key_bytes, 32 ) );
+const auto bench_nonce = aead::nonce_t::from_span( std::span< const std::uint8_t >( bench_nonce_bytes, 12 ) );
+
+bool g_markdown					   = false;
+bool g_self_ok					   = true;
+[[maybe_unused]] bool g_openssl_ok = true;
+[[maybe_unused]] bool g_sodium_ok  = true;
+
+struct result_t
 {
-	constexpr std::size_t reps = 7;
+	double mib_per_sec { };
+	double ns_per_op { };
+	double min_ns { };
+	double max_ns { };
+	bool ok { };
+};
 
-	const std::uint8_t bench_key_bytes[ 32 ]   = { 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
-		0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f };
-	const std::uint8_t bench_nonce_bytes[ 12 ] = { 0x07, 0x00, 0x00, 0x00, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47 };
-	const std::uint8_t bench_aad[ 12 ]		   = { 0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7 };
+auto fmt_mib( double mib ) -> std::string
+{
+	char buffer[ 48 ];
+	std::snprintf( buffer, sizeof( buffer ), "%.1f MiB/s", mib );
+	return buffer;
+}
 
-	const auto bench_key   = aead::key_t::from_span( std::span< const std::uint8_t >( bench_key_bytes, 32 ) );
-	const auto bench_nonce = aead::nonce_t::from_span( std::span< const std::uint8_t >( bench_nonce_bytes, 12 ) );
+auto fmt_time( double ns ) -> std::string
+{
+	char buffer[ 48 ];
+	if ( ns < 1000.0 )
+		std::snprintf( buffer, sizeof( buffer ), "%.0f ns/op", ns );
+	else if ( ns < 1000000.0 )
+		std::snprintf( buffer, sizeof( buffer ), "%.2f us/op", ns / 1000.0 );
+	else
+		std::snprintf( buffer, sizeof( buffer ), "%.2f ms/op", ns / 1000000.0 );
+	return buffer;
+}
 
-	bool g_markdown					   = false;
-	bool g_self_ok					   = true;
-	[[maybe_unused]] bool g_openssl_ok = true;
-	[[maybe_unused]] bool g_sodium_ok  = true;
+struct environment_t
+{
+	std::string cpu;
+	std::string compiler;
+	std::string os;
+	std::string flags;
+};
 
-	struct result_t
-	{
-		double mib_per_sec { };
-		double ns_per_op { };
-		double min_ns { };
-		double max_ns { };
-		bool ok { };
-	};
-
-	auto fmt_mib( double mib ) -> std::string
-	{
-		char buffer[ 48 ];
-		std::snprintf( buffer, sizeof( buffer ), "%.1f MiB/s", mib );
-		return buffer;
-	}
-
-	auto fmt_time( double ns ) -> std::string
-	{
-		char buffer[ 48 ];
-		if ( ns < 1000.0 )
-			std::snprintf( buffer, sizeof( buffer ), "%.0f ns/op", ns );
-		else if ( ns < 1000000.0 )
-			std::snprintf( buffer, sizeof( buffer ), "%.2f us/op", ns / 1000.0 );
-		else
-			std::snprintf( buffer, sizeof( buffer ), "%.2f ms/op", ns / 1000000.0 );
-		return buffer;
-	}
-
-	auto fmt_time_spread( const result_t& r ) -> std::string
-	{
-		char buffer[ 96 ];
-		if ( r.ns_per_op < 1000.0 )
-			std::snprintf( buffer, sizeof( buffer ), "%.0f ns/op [%.0f..%.0f]", r.ns_per_op, r.min_ns, r.max_ns );
-		else if ( r.ns_per_op < 1000000.0 )
-			std::snprintf( buffer, sizeof( buffer ), "%.2f us/op [%.2f..%.2f]", r.ns_per_op / 1000.0, r.min_ns / 1000.0, r.max_ns / 1000.0 );
-		else
-			std::snprintf( buffer, sizeof( buffer ), "%.2f ms/op [%.2f..%.2f]", r.ns_per_op / 1000000.0, r.min_ns / 1000000.0, r.max_ns / 1000000.0 );
-		return buffer;
-	}
-
-	struct environment_t
-	{
-		std::string cpu;
-		std::string compiler;
-		std::string os;
-		std::string flags;
-	};
-
-	auto query_environment( ) -> environment_t
-	{
-		environment_t env;
+auto query_environment( ) -> environment_t
+{
+	environment_t env;
 
 #if defined( _WIN32 )
-		env.os = "Windows x64";
-		std::int32_t regs[ 4 ] { };
-		char brand[ 49 ] { };
-		__cpuid( regs, 0x80000000 );
-		if ( static_cast< std::uint32_t >( regs[ 0 ] ) >= 0x80000004 )
+	env.os = "Windows x64";
+	std::int32_t regs[ 4 ] { };
+	char brand[ 49 ] { };
+	__cpuid( regs, 0x80000000 );
+	if ( static_cast< std::uint32_t >( regs[ 0 ] ) >= 0x80000004 )
+	{
+		for ( unsigned leaf = 0; leaf < 3; ++leaf )
 		{
-			for ( unsigned leaf = 0; leaf < 3; ++leaf )
-			{
-				__cpuid( regs, static_cast< std::int32_t >( 0x80000002 + leaf ) );
-				std::memcpy( brand + leaf * 16, regs, 16 );
-			}
-			env.cpu = brand;
+			__cpuid( regs, static_cast< std::int32_t >( 0x80000002 + leaf ) );
+			std::memcpy( brand + leaf * 16, regs, 16 );
 		}
+		env.cpu = brand;
+	}
 #else
-		env.os = "posix";
+	env.os = "posix";
 #endif
-		while ( !env.cpu.empty( ) && env.cpu.back( ) == ' ' )
-			env.cpu.pop_back( );
+	while ( !env.cpu.empty( ) && env.cpu.back( ) == ' ' )
+		env.cpu.pop_back( );
 
 #if defined( __clang__ )
-		env.compiler = "Clang " + std::to_string( __clang_major__ ) + "." + std::to_string( __clang_minor__ );
+	env.compiler = "Clang " + std::to_string( __clang_major__ ) + "." + std::to_string( __clang_minor__ );
 #elif defined( __GNUC__ )
-		env.compiler = "GCC " + std::to_string( __GNUC__ ) + "." + std::to_string( __GNUC_MINOR__ );
+	env.compiler = "GCC " + std::to_string( __GNUC__ ) + "." + std::to_string( __GNUC_MINOR__ );
 #elif defined( _MSC_VER )
-		env.compiler = "MSVC " + std::to_string( _MSC_VER );
+	env.compiler = "MSVC " + std::to_string( _MSC_VER );
 #endif
 
 #if defined( CCP_BENCH_FLAGS )
-		env.flags = CCP_BENCH_FLAGS;
+	env.flags = CCP_BENCH_FLAGS;
 #else
-		env.flags = "unrecorded";
+	env.flags = "unrecorded";
 #endif
 
-		return env;
-	}
+	return env;
+}
 
-	auto resolved_backend( ) -> std::string
-	{
+auto resolved_backend( ) -> std::string
+{
 #if defined( CCP_X86_SIMD )
-		if ( aead::detail::probe_avx512f( ) )
-			return "avx-512";
-		if ( aead::detail::probe_avx2( ) )
-			return "avx2";
-		return "sse2";
+	if ( aead::detail::probe_avx512f( ) )
+		return "avx-512";
+	if ( aead::detail::probe_avx2( ) )
+		return "avx2";
+	return "sse2";
 #elif defined( CCP_NEON_ENABLED )
-		return "neon";
+	return "neon";
 #else
-		return "scalar";
+	return "scalar";
 #endif
-	}
+}
 
-	auto measure( void ( *fn )( const std::uint8_t*, std::size_t, std::size_t ), std::size_t size, std::size_t ops ) -> result_t
+auto measure( void ( *fn )( const std::uint8_t*, std::size_t, std::size_t ), std::size_t size, std::size_t ops ) -> result_t
+{
+	const std::vector< std::uint8_t > data( size, 0xAB );
+
+	fn( data.data( ), size, ops / 8 + 1 );
+
+	std::vector< double > ns;
+	ns.reserve( reps );
+	for ( std::size_t rep = 0; rep < reps; ++rep )
 	{
-		const std::vector< std::uint8_t > data( size, 0xAB );
+		const auto start = std::chrono::steady_clock::now( );
+		fn( data.data( ), size, ops );
+		const auto end = std::chrono::steady_clock::now( );
 
-		fn( data.data( ), size, ops / 8 + 1 );
-
-		std::vector< double > ns;
-		ns.reserve( reps );
-		for ( std::size_t rep = 0; rep < reps; ++rep )
-		{
-			const auto start = std::chrono::steady_clock::now( );
-			fn( data.data( ), size, ops );
-			const auto end = std::chrono::steady_clock::now( );
-
-			const double secs = std::chrono::duration< double >( end - start ).count( );
-			if ( secs > 0.0 )
-				ns.push_back( secs * 1e9 / static_cast< double >( ops ) );
-		}
-
-		if ( ns.empty( ) )
-			return { };
-
-		std::vector< double > sorted = ns;
-		std::sort( sorted.begin( ), sorted.end( ) );
-
-		result_t out;
-		out.ok			= true;
-		out.ns_per_op	= sorted[ sorted.size( ) / 2 ];
-		out.min_ns		= sorted.front( );
-		out.max_ns		= sorted.back( );
-		out.mib_per_sec = static_cast< double >( size ) / ( out.ns_per_op * 1e-9 ) / ( 1024.0 * 1024.0 );
-		return out;
+		const double secs = std::chrono::duration< double >( end - start ).count( );
+		if ( secs > 0.0 )
+			ns.push_back( secs * 1e9 / static_cast< double >( ops ) );
 	}
 
-	auto this_chacha( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
-	{
-		static std::vector< std::uint8_t > out;
-		out.resize( size );
-		for ( std::size_t idx = 0; idx < ops; ++idx )
-			aead::chacha20::xor_stream( out, std::span< const std::uint8_t >( data, size ), bench_key, bench_nonce, 1 );
-	}
+	if ( ns.empty( ) )
+		return { };
 
-	auto this_poly( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
-	{
-		for ( std::size_t idx = 0; idx < ops; ++idx )
-			( void )aead::poly1305::mac( std::span< const std::uint8_t >( data, size ), bench_key );
-	}
+	std::vector< double > sorted = ns;
+	std::sort( sorted.begin( ), sorted.end( ) );
 
-	auto this_aead_encrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
-	{
-		static std::vector< std::uint8_t > ct;
-		ct.resize( size );
-		for ( std::size_t idx = 0; idx < ops; ++idx )
-			( void )aead::encrypt( ct, std::span< const std::uint8_t >( data, size ), bench_aad, bench_key, bench_nonce );
-	}
+	result_t out;
+	out.ok			= true;
+	out.ns_per_op	= sorted[ sorted.size( ) / 2 ];
+	out.min_ns		= sorted.front( );
+	out.max_ns		= sorted.back( );
+	out.mib_per_sec = static_cast< double >( size ) / ( out.ns_per_op * 1e-9 ) / ( 1024.0 * 1024.0 );
+	return out;
+}
 
-	auto this_aead_decrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
-	{
-		static std::vector< std::uint8_t > ct;
-		static std::vector< std::uint8_t > pt;
-		ct.resize( size );
-		pt.resize( size );
-		const auto tag = aead::encrypt( ct, std::span< const std::uint8_t >( data, size ), bench_aad, bench_key, bench_nonce );
-		for ( std::size_t idx = 0; idx < ops; ++idx )
-			( void )aead::decrypt( pt, ct, bench_aad, bench_key, bench_nonce, tag );
-	}
+auto this_chacha( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	static std::vector< std::uint8_t > out;
+	out.resize( size );
+	for ( std::size_t idx = 0; idx < ops; ++idx )
+		aead::chacha20::xor_stream( out, std::span< const std::uint8_t >( data, size ), bench_key, bench_nonce, 1 );
+}
+
+auto this_poly( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	for ( std::size_t idx = 0; idx < ops; ++idx )
+		( void )aead::poly1305::mac( std::span< const std::uint8_t >( data, size ), bench_key );
+}
+
+auto this_aead_encrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	static std::vector< std::uint8_t > ct;
+	ct.resize( size );
+	for ( std::size_t idx = 0; idx < ops; ++idx )
+		( void )aead::encrypt( ct, std::span< const std::uint8_t >( data, size ), bench_aad, bench_key, bench_nonce );
+}
+
+auto this_aead_decrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	static std::vector< std::uint8_t > ct;
+	static std::vector< std::uint8_t > pt;
+	ct.resize( size );
+	pt.resize( size );
+	const auto tag = aead::encrypt( ct, std::span< const std::uint8_t >( data, size ), bench_aad, bench_key, bench_nonce );
+	for ( std::size_t idx = 0; idx < ops; ++idx )
+		( void )aead::decrypt( pt, ct, bench_aad, bench_key, bench_nonce, tag );
+}
 
 #if defined( CCP_BENCH_OPENSSL )
 
-	auto ossl_chacha( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+auto ossl_chacha( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	static std::vector< std::uint8_t > out;
+	out.resize( size );
+
+	std::uint8_t iv[ 16 ] { };
+	iv[ 0 ] = 1;
+	std::memcpy( iv + 4, bench_nonce_bytes, 12 );
+
+	EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
+	for ( std::size_t idx = 0; idx < ops; ++idx )
 	{
-		static std::vector< std::uint8_t > out;
-		out.resize( size );
+		int len = 0;
+		EVP_EncryptInit_ex( ctx, EVP_chacha20( ), nullptr, bench_key_bytes, iv );
+		EVP_EncryptUpdate( ctx, out.data( ), &len, data, static_cast< int >( size ) );
+		EVP_EncryptFinal_ex( ctx, out.data( ) + len, &len );
+	}
+	EVP_CIPHER_CTX_free( ctx );
+}
 
-		std::uint8_t iv[ 16 ] { };
-		iv[ 0 ] = 1;
-		std::memcpy( iv + 4, bench_nonce_bytes, 12 );
+auto ossl_poly( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	EVP_MAC* mac	 = EVP_MAC_fetch( nullptr, "POLY1305", nullptr );
+	EVP_MAC_CTX* ctx = EVP_MAC_CTX_new( mac );
 
-		EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
-		for ( std::size_t idx = 0; idx < ops; ++idx )
-		{
-			int len = 0;
-			EVP_EncryptInit_ex( ctx, EVP_chacha20( ), nullptr, bench_key_bytes, iv );
-			EVP_EncryptUpdate( ctx, out.data( ), &len, data, static_cast< int >( size ) );
-			EVP_EncryptFinal_ex( ctx, out.data( ) + len, &len );
-		}
-		EVP_CIPHER_CTX_free( ctx );
+	std::uint8_t tag[ 16 ];
+	std::size_t tag_len = 16;
+	for ( std::size_t idx = 0; idx < ops; ++idx )
+	{
+		EVP_MAC_init( ctx, bench_key_bytes, 32, nullptr );
+		EVP_MAC_update( ctx, data, size );
+		EVP_MAC_final( ctx, tag, &tag_len, sizeof( tag ) );
 	}
 
-	auto ossl_poly( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+	EVP_MAC_CTX_free( ctx );
+	EVP_MAC_free( mac );
+}
+
+auto ossl_aead_encrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	static std::vector< std::uint8_t > ct;
+	ct.resize( size );
+
+	EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
+	std::uint8_t tag[ 16 ];
+	for ( std::size_t idx = 0; idx < ops; ++idx )
 	{
-		EVP_MAC* mac	 = EVP_MAC_fetch( nullptr, "POLY1305", nullptr );
-		EVP_MAC_CTX* ctx = EVP_MAC_CTX_new( mac );
-
-		std::uint8_t tag[ 16 ];
-		std::size_t tag_len = 16;
-		for ( std::size_t idx = 0; idx < ops; ++idx )
-		{
-			EVP_MAC_init( ctx, bench_key_bytes, 32, nullptr );
-			EVP_MAC_update( ctx, data, size );
-			EVP_MAC_final( ctx, tag, &tag_len, sizeof( tag ) );
-		}
-
-		EVP_MAC_CTX_free( ctx );
-		EVP_MAC_free( mac );
+		int len = 0;
+		EVP_EncryptInit_ex( ctx, EVP_chacha20_poly1305( ), nullptr, bench_key_bytes, bench_nonce_bytes );
+		EVP_EncryptUpdate( ctx, nullptr, &len, bench_aad, sizeof( bench_aad ) );
+		EVP_EncryptUpdate( ctx, ct.data( ), &len, data, static_cast< int >( size ) );
+		EVP_EncryptFinal_ex( ctx, ct.data( ) + len, &len );
+		EVP_CIPHER_CTX_ctrl( ctx, EVP_CTRL_AEAD_GET_TAG, 16, tag );
 	}
+	EVP_CIPHER_CTX_free( ctx );
+}
 
-	auto ossl_aead_encrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+auto ossl_aead_decrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	static std::vector< std::uint8_t > ct;
+	static std::vector< std::uint8_t > pt;
+	ct.resize( size );
+	pt.resize( size );
+
+	std::uint8_t tag[ 16 ];
+	EVP_CIPHER_CTX* enc = EVP_CIPHER_CTX_new( );
+	int len				= 0;
+	EVP_EncryptInit_ex( enc, EVP_chacha20_poly1305( ), nullptr, bench_key_bytes, bench_nonce_bytes );
+	EVP_EncryptUpdate( enc, nullptr, &len, bench_aad, sizeof( bench_aad ) );
+	EVP_EncryptUpdate( enc, ct.data( ), &len, data, static_cast< int >( size ) );
+	EVP_EncryptFinal_ex( enc, ct.data( ) + len, &len );
+	EVP_CIPHER_CTX_ctrl( enc, EVP_CTRL_AEAD_GET_TAG, 16, tag );
+	EVP_CIPHER_CTX_free( enc );
+
+	EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
+	for ( std::size_t idx = 0; idx < ops; ++idx )
 	{
-		static std::vector< std::uint8_t > ct;
-		ct.resize( size );
+		EVP_DecryptInit_ex( ctx, EVP_chacha20_poly1305( ), nullptr, bench_key_bytes, bench_nonce_bytes );
+		EVP_CIPHER_CTX_ctrl( ctx, EVP_CTRL_AEAD_SET_TAG, 16, tag );
+		EVP_DecryptUpdate( ctx, nullptr, &len, bench_aad, sizeof( bench_aad ) );
+		EVP_DecryptUpdate( ctx, pt.data( ), &len, ct.data( ), static_cast< int >( size ) );
+		( void )EVP_DecryptFinal_ex( ctx, pt.data( ) + len, &len );
+	}
+	EVP_CIPHER_CTX_free( ctx );
+}
 
-		EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
-		std::uint8_t tag[ 16 ];
-		for ( std::size_t idx = 0; idx < ops; ++idx )
+#endif
+
+#if defined( CCP_BENCH_SODIUM )
+
+auto sodium_chacha( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	static std::vector< std::uint8_t > out;
+	out.resize( size );
+	for ( std::size_t idx = 0; idx < ops; ++idx )
+		crypto_stream_chacha20_ietf_xor( out.data( ), data, size, bench_nonce_bytes, bench_key_bytes );
+}
+
+auto sodium_poly( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	std::uint8_t tag[ 16 ];
+	for ( std::size_t idx = 0; idx < ops; ++idx )
+		crypto_onetimeauth_poly1305( tag, data, size, bench_key_bytes );
+}
+
+auto sodium_aead_encrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	static std::vector< std::uint8_t > ct;
+	ct.resize( size + 16 );
+	unsigned long long clen = 0;
+	for ( std::size_t idx = 0; idx < ops; ++idx )
+		crypto_aead_chacha20poly1305_ietf_encrypt( ct.data( ), &clen, data, size, bench_aad, sizeof( bench_aad ), nullptr, bench_nonce_bytes, bench_key_bytes );
+}
+
+auto sodium_aead_decrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
+{
+	static std::vector< std::uint8_t > ct;
+	static std::vector< std::uint8_t > pt;
+	ct.resize( size + 16 );
+	pt.resize( size );
+
+	unsigned long long clen = 0;
+	crypto_aead_chacha20poly1305_ietf_encrypt( ct.data( ), &clen, data, size, bench_aad, sizeof( bench_aad ), nullptr, bench_nonce_bytes, bench_key_bytes );
+
+	unsigned long long mlen = 0;
+	for ( std::size_t idx = 0; idx < ops; ++idx )
+		( void )crypto_aead_chacha20poly1305_ietf_decrypt( pt.data( ), &mlen, nullptr, ct.data( ), clen, bench_aad, sizeof( bench_aad ), bench_nonce_bytes, bench_key_bytes );
+}
+
+#endif
+
+auto verify_equivalence( ) -> void
+{
+	for ( std::size_t size : { std::size_t( 64 ), std::size_t( 114 ), std::size_t( 1024 ), std::size_t( 4096 ) } )
+	{
+		std::vector< std::uint8_t > plain( size );
+		for ( std::size_t idx = 0; idx < size; ++idx )
+			plain[ idx ] = static_cast< std::uint8_t >( idx * 31 + 7 );
+
+		std::vector< std::uint8_t > ref_ct( size );
+		const auto ref_tag = aead::encrypt( ref_ct, plain, bench_aad, bench_key, bench_nonce );
+		( void )ref_tag;
+
+#if defined( CCP_BENCH_OPENSSL )
 		{
-			int len = 0;
+			std::vector< std::uint8_t > ct( size );
+			std::uint8_t tag[ 16 ];
+			EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
+			int len				= 0;
 			EVP_EncryptInit_ex( ctx, EVP_chacha20_poly1305( ), nullptr, bench_key_bytes, bench_nonce_bytes );
 			EVP_EncryptUpdate( ctx, nullptr, &len, bench_aad, sizeof( bench_aad ) );
-			EVP_EncryptUpdate( ctx, ct.data( ), &len, data, static_cast< int >( size ) );
+			EVP_EncryptUpdate( ctx, ct.data( ), &len, plain.data( ), static_cast< int >( size ) );
 			EVP_EncryptFinal_ex( ctx, ct.data( ) + len, &len );
 			EVP_CIPHER_CTX_ctrl( ctx, EVP_CTRL_AEAD_GET_TAG, 16, tag );
+			EVP_CIPHER_CTX_free( ctx );
+
+			if ( std::memcmp( ct.data( ), ref_ct.data( ), size ) != 0 || std::memcmp( tag, ref_tag.bytes.data( ), 16 ) != 0 )
+				g_openssl_ok = false;
 		}
-		EVP_CIPHER_CTX_free( ctx );
+#endif
+
+#if defined( CCP_BENCH_SODIUM )
+		{
+			std::vector< std::uint8_t > ct( size + 16 );
+			unsigned long long clen = 0;
+			crypto_aead_chacha20poly1305_ietf_encrypt( ct.data( ), &clen, plain.data( ), size, bench_aad, sizeof( bench_aad ), nullptr, bench_nonce_bytes, bench_key_bytes );
+
+			if ( clen != size + 16 || std::memcmp( ct.data( ), ref_ct.data( ), size ) != 0 || std::memcmp( ct.data( ) + size, ref_tag.bytes.data( ), 16 ) != 0 )
+				g_sodium_ok = false;
+		}
+#endif
 	}
 
-	auto ossl_aead_decrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
 	{
-		static std::vector< std::uint8_t > ct;
-		static std::vector< std::uint8_t > pt;
-		ct.resize( size );
-		pt.resize( size );
+		std::vector< std::uint8_t > plain( 300 );
+		for ( std::size_t idx = 0; idx < plain.size( ); ++idx )
+			plain[ idx ] = static_cast< std::uint8_t >( idx );
 
-		std::uint8_t tag[ 16 ];
-		EVP_CIPHER_CTX* enc = EVP_CIPHER_CTX_new( );
-		int len				= 0;
-		EVP_EncryptInit_ex( enc, EVP_chacha20_poly1305( ), nullptr, bench_key_bytes, bench_nonce_bytes );
-		EVP_EncryptUpdate( enc, nullptr, &len, bench_aad, sizeof( bench_aad ) );
-		EVP_EncryptUpdate( enc, ct.data( ), &len, data, static_cast< int >( size ) );
-		EVP_EncryptFinal_ex( enc, ct.data( ) + len, &len );
-		EVP_CIPHER_CTX_ctrl( enc, EVP_CTRL_AEAD_GET_TAG, 16, tag );
-		EVP_CIPHER_CTX_free( enc );
+		std::vector< std::uint8_t > ct( 300 );
+		auto tag = aead::encrypt( ct, plain, bench_aad, bench_key, bench_nonce );
+		tag.bytes[ 15 ] ^= 0x80;
 
-		EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
-		for ( std::size_t idx = 0; idx < ops; ++idx )
+		std::vector< std::uint8_t > pt( 300 );
+		if ( aead::decrypt( pt, ct, bench_aad, bench_key, bench_nonce, tag ) )
+			g_self_ok = false;
+
+#if defined( CCP_BENCH_OPENSSL )
 		{
+			std::vector< std::uint8_t > oct( 300 );
+			std::vector< std::uint8_t > opt( 300 );
+			std::uint8_t otag[ 16 ];
+			EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
+			int len				= 0;
+			EVP_EncryptInit_ex( ctx, EVP_chacha20_poly1305( ), nullptr, bench_key_bytes, bench_nonce_bytes );
+			EVP_EncryptUpdate( ctx, nullptr, &len, bench_aad, sizeof( bench_aad ) );
+			EVP_EncryptUpdate( ctx, oct.data( ), &len, plain.data( ), 300 );
+			EVP_EncryptFinal_ex( ctx, oct.data( ) + len, &len );
+			EVP_CIPHER_CTX_ctrl( ctx, EVP_CTRL_AEAD_GET_TAG, 16, otag );
+			otag[ 15 ] ^= 0x80;
 			EVP_DecryptInit_ex( ctx, EVP_chacha20_poly1305( ), nullptr, bench_key_bytes, bench_nonce_bytes );
-			EVP_CIPHER_CTX_ctrl( ctx, EVP_CTRL_AEAD_SET_TAG, 16, tag );
-			EVP_DecryptUpdate( ctx, nullptr, &len, bench_aad, sizeof( bench_aad ) );
-			EVP_DecryptUpdate( ctx, pt.data( ), &len, ct.data( ), static_cast< int >( size ) );
-			( void )EVP_DecryptFinal_ex( ctx, pt.data( ) + len, &len );
+			EVP_CIPHER_CTX_ctrl( ctx, EVP_CTRL_AEAD_SET_TAG, 16, otag );
+			int len2 = 0;
+			EVP_DecryptUpdate( ctx, nullptr, &len2, bench_aad, sizeof( bench_aad ) );
+			EVP_DecryptUpdate( ctx, opt.data( ), &len2, oct.data( ), 300 );
+			if ( EVP_DecryptFinal_ex( ctx, opt.data( ) + len2, &len2 ) > 0 )
+				g_openssl_ok = false;
+			EVP_CIPHER_CTX_free( ctx );
 		}
-		EVP_CIPHER_CTX_free( ctx );
-	}
-
 #endif
 
 #if defined( CCP_BENCH_SODIUM )
-
-	auto sodium_chacha( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
-	{
-		static std::vector< std::uint8_t > out;
-		out.resize( size );
-		for ( std::size_t idx = 0; idx < ops; ++idx )
-			crypto_stream_chacha20_ietf_xor( out.data( ), data, size, bench_nonce_bytes, bench_key_bytes );
-	}
-
-	auto sodium_poly( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
-	{
-		std::uint8_t tag[ 16 ];
-		for ( std::size_t idx = 0; idx < ops; ++idx )
-			crypto_onetimeauth_poly1305( tag, data, size, bench_key_bytes );
-	}
-
-	auto sodium_aead_encrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
-	{
-		static std::vector< std::uint8_t > ct;
-		ct.resize( size + 16 );
-		unsigned long long clen = 0;
-		for ( std::size_t idx = 0; idx < ops; ++idx )
-			crypto_aead_chacha20poly1305_ietf_encrypt( ct.data( ), &clen, data, size, bench_aad, sizeof( bench_aad ), nullptr, bench_nonce_bytes, bench_key_bytes );
-	}
-
-	auto sodium_aead_decrypt( const std::uint8_t* data, std::size_t size, std::size_t ops ) -> void
-	{
-		static std::vector< std::uint8_t > ct;
-		static std::vector< std::uint8_t > pt;
-		ct.resize( size + 16 );
-		pt.resize( size );
-
-		unsigned long long clen = 0;
-		crypto_aead_chacha20poly1305_ietf_encrypt( ct.data( ), &clen, data, size, bench_aad, sizeof( bench_aad ), nullptr, bench_nonce_bytes, bench_key_bytes );
-
-		unsigned long long mlen = 0;
-		for ( std::size_t idx = 0; idx < ops; ++idx )
-			( void )crypto_aead_chacha20poly1305_ietf_decrypt( pt.data( ), &mlen, nullptr, ct.data( ), clen, bench_aad, sizeof( bench_aad ), bench_nonce_bytes, bench_key_bytes );
-	}
-
-#endif
-
-	auto verify_equivalence( ) -> void
-	{
-		for ( std::size_t size : { std::size_t( 64 ), std::size_t( 114 ), std::size_t( 1024 ), std::size_t( 4096 ) } )
 		{
-			std::vector< std::uint8_t > plain( size );
-			for ( std::size_t idx = 0; idx < size; ++idx )
-				plain[ idx ] = static_cast< std::uint8_t >( idx * 31 + 7 );
+			std::vector< std::uint8_t > sct( 316 );
+			std::vector< std::uint8_t > spt( 300 );
+			unsigned long long clen = 0, mlen = 0;
+			crypto_aead_chacha20poly1305_ietf_encrypt( sct.data( ), &clen, plain.data( ), 300, bench_aad, sizeof( bench_aad ), nullptr, bench_nonce_bytes, bench_key_bytes );
+			sct[ clen - 1 ] ^= 0x80;
+			if ( crypto_aead_chacha20poly1305_ietf_decrypt( spt.data( ), &mlen, nullptr, sct.data( ), clen, bench_aad, sizeof( bench_aad ), bench_nonce_bytes, bench_key_bytes ) == 0 )
+				g_sodium_ok = false;
+		}
+#endif
+	}
 
-			std::vector< std::uint8_t > ref_ct( size );
-			const auto ref_tag = aead::encrypt( ref_ct, plain, bench_aad, bench_key, bench_nonce );
-			( void )ref_tag;
+	{
+		std::vector< std::uint8_t > data( 1024, 0x5a );
+		std::vector< std::uint8_t > ref( 1024 );
+		aead::chacha20::xor_stream( ref, data, bench_key, bench_nonce, 1 );
 
 #if defined( CCP_BENCH_OPENSSL )
-			{
-				std::vector< std::uint8_t > ct( size );
-				std::uint8_t tag[ 16 ];
-				EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
-				int len				= 0;
-				EVP_EncryptInit_ex( ctx, EVP_chacha20_poly1305( ), nullptr, bench_key_bytes, bench_nonce_bytes );
-				EVP_EncryptUpdate( ctx, nullptr, &len, bench_aad, sizeof( bench_aad ) );
-				EVP_EncryptUpdate( ctx, ct.data( ), &len, plain.data( ), static_cast< int >( size ) );
-				EVP_EncryptFinal_ex( ctx, ct.data( ) + len, &len );
-				EVP_CIPHER_CTX_ctrl( ctx, EVP_CTRL_AEAD_GET_TAG, 16, tag );
-				EVP_CIPHER_CTX_free( ctx );
-
-				if ( std::memcmp( ct.data( ), ref_ct.data( ), size ) != 0 || std::memcmp( tag, ref_tag.bytes.data( ), 16 ) != 0 )
-					g_openssl_ok = false;
-			}
+		{
+			std::vector< std::uint8_t > out( 1024 );
+			std::uint8_t iv[ 16 ] { };
+			iv[ 0 ] = 1;
+			std::memcpy( iv + 4, bench_nonce_bytes, 12 );
+			EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
+			int len				= 0;
+			EVP_EncryptInit_ex( ctx, EVP_chacha20( ), nullptr, bench_key_bytes, iv );
+			EVP_EncryptUpdate( ctx, out.data( ), &len, data.data( ), 1024 );
+			EVP_EncryptFinal_ex( ctx, out.data( ) + len, &len );
+			EVP_CIPHER_CTX_free( ctx );
+			if ( std::memcmp( out.data( ), ref.data( ), 1024 ) != 0 )
+				g_openssl_ok = false;
+		}
 #endif
 
 #if defined( CCP_BENCH_SODIUM )
-			{
-				std::vector< std::uint8_t > ct( size + 16 );
-				unsigned long long clen = 0;
-				crypto_aead_chacha20poly1305_ietf_encrypt( ct.data( ), &clen, plain.data( ), size, bench_aad, sizeof( bench_aad ), nullptr, bench_nonce_bytes, bench_key_bytes );
-
-				if ( clen != size + 16 || std::memcmp( ct.data( ), ref_ct.data( ), size ) != 0 || std::memcmp( ct.data( ) + size, ref_tag.bytes.data( ), 16 ) != 0 )
-					g_sodium_ok = false;
-			}
-#endif
-		}
-
 		{
-			std::vector< std::uint8_t > plain( 300 );
-			for ( std::size_t idx = 0; idx < plain.size( ); ++idx )
-				plain[ idx ] = static_cast< std::uint8_t >( idx );
+			std::vector< std::uint8_t > ref0( 1024 );
+			std::vector< std::uint8_t > out( 1024 );
+			aead::chacha20::xor_stream( ref0, data, bench_key, bench_nonce, 0 );
+			crypto_stream_chacha20_ietf_xor( out.data( ), data.data( ), 1024, bench_nonce_bytes, bench_key_bytes );
+			if ( std::memcmp( out.data( ), ref0.data( ), 1024 ) != 0 )
+				g_sodium_ok = false;
+		}
+#endif
+	}
 
-			std::vector< std::uint8_t > ct( 300 );
-			auto tag = aead::encrypt( ct, plain, bench_aad, bench_key, bench_nonce );
-			tag.bytes[ 15 ] ^= 0x80;
+	{
+		std::vector< std::uint8_t > data( 512 );
+		for ( std::size_t idx = 0; idx < data.size( ); ++idx )
+			data[ idx ] = static_cast< std::uint8_t >( idx * 3 );
 
-			std::vector< std::uint8_t > pt( 300 );
-			if ( aead::decrypt( pt, ct, bench_aad, bench_key, bench_nonce, tag ) )
-				g_self_ok = false;
+		const auto ref_tag = aead::poly1305::mac( data, bench_key );
+		( void )ref_tag;
 
 #if defined( CCP_BENCH_OPENSSL )
-			{
-				std::vector< std::uint8_t > oct( 300 );
-				std::vector< std::uint8_t > opt( 300 );
-				std::uint8_t otag[ 16 ];
-				EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
-				int len				= 0;
-				EVP_EncryptInit_ex( ctx, EVP_chacha20_poly1305( ), nullptr, bench_key_bytes, bench_nonce_bytes );
-				EVP_EncryptUpdate( ctx, nullptr, &len, bench_aad, sizeof( bench_aad ) );
-				EVP_EncryptUpdate( ctx, oct.data( ), &len, plain.data( ), 300 );
-				EVP_EncryptFinal_ex( ctx, oct.data( ) + len, &len );
-				EVP_CIPHER_CTX_ctrl( ctx, EVP_CTRL_AEAD_GET_TAG, 16, otag );
-				otag[ 15 ] ^= 0x80;
-				EVP_DecryptInit_ex( ctx, EVP_chacha20_poly1305( ), nullptr, bench_key_bytes, bench_nonce_bytes );
-				EVP_CIPHER_CTX_ctrl( ctx, EVP_CTRL_AEAD_SET_TAG, 16, otag );
-				int len2 = 0;
-				EVP_DecryptUpdate( ctx, nullptr, &len2, bench_aad, sizeof( bench_aad ) );
-				EVP_DecryptUpdate( ctx, opt.data( ), &len2, oct.data( ), 300 );
-				if ( EVP_DecryptFinal_ex( ctx, opt.data( ) + len2, &len2 ) > 0 )
-					g_openssl_ok = false;
-				EVP_CIPHER_CTX_free( ctx );
-			}
-#endif
-
-#if defined( CCP_BENCH_SODIUM )
-			{
-				std::vector< std::uint8_t > sct( 316 );
-				std::vector< std::uint8_t > spt( 300 );
-				unsigned long long clen = 0, mlen = 0;
-				crypto_aead_chacha20poly1305_ietf_encrypt( sct.data( ), &clen, plain.data( ), 300, bench_aad, sizeof( bench_aad ), nullptr, bench_nonce_bytes, bench_key_bytes );
-				sct[ clen - 1 ] ^= 0x80;
-				if ( crypto_aead_chacha20poly1305_ietf_decrypt( spt.data( ), &mlen, nullptr, sct.data( ), clen, bench_aad, sizeof( bench_aad ), bench_nonce_bytes, bench_key_bytes ) == 0 )
-					g_sodium_ok = false;
-			}
-#endif
-		}
-
 		{
-			std::vector< std::uint8_t > data( 1024, 0x5a );
-			std::vector< std::uint8_t > ref( 1024 );
-			aead::chacha20::xor_stream( ref, data, bench_key, bench_nonce, 1 );
-
-#if defined( CCP_BENCH_OPENSSL )
-			{
-				std::vector< std::uint8_t > out( 1024 );
-				std::uint8_t iv[ 16 ] { };
-				iv[ 0 ] = 1;
-				std::memcpy( iv + 4, bench_nonce_bytes, 12 );
-				EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new( );
-				int len				= 0;
-				EVP_EncryptInit_ex( ctx, EVP_chacha20( ), nullptr, bench_key_bytes, iv );
-				EVP_EncryptUpdate( ctx, out.data( ), &len, data.data( ), 1024 );
-				EVP_EncryptFinal_ex( ctx, out.data( ) + len, &len );
-				EVP_CIPHER_CTX_free( ctx );
-				if ( std::memcmp( out.data( ), ref.data( ), 1024 ) != 0 )
-					g_openssl_ok = false;
-			}
+			EVP_MAC* mac	 = EVP_MAC_fetch( nullptr, "POLY1305", nullptr );
+			EVP_MAC_CTX* ctx = EVP_MAC_CTX_new( mac );
+			std::uint8_t tag[ 16 ];
+			std::size_t tag_len = 16;
+			EVP_MAC_init( ctx, bench_key_bytes, 32, nullptr );
+			EVP_MAC_update( ctx, data.data( ), data.size( ) );
+			EVP_MAC_final( ctx, tag, &tag_len, sizeof( tag ) );
+			EVP_MAC_CTX_free( ctx );
+			EVP_MAC_free( mac );
+			if ( std::memcmp( tag, ref_tag.bytes.data( ), 16 ) != 0 )
+				g_openssl_ok = false;
+		}
 #endif
 
 #if defined( CCP_BENCH_SODIUM )
-			{
-				std::vector< std::uint8_t > ref0( 1024 );
-				std::vector< std::uint8_t > out( 1024 );
-				aead::chacha20::xor_stream( ref0, data, bench_key, bench_nonce, 0 );
-				crypto_stream_chacha20_ietf_xor( out.data( ), data.data( ), 1024, bench_nonce_bytes, bench_key_bytes );
-				if ( std::memcmp( out.data( ), ref0.data( ), 1024 ) != 0 )
-					g_sodium_ok = false;
-			}
-#endif
-		}
-
 		{
-			std::vector< std::uint8_t > data( 512 );
-			for ( std::size_t idx = 0; idx < data.size( ); ++idx )
-				data[ idx ] = static_cast< std::uint8_t >( idx * 3 );
-
-			const auto ref_tag = aead::poly1305::mac( data, bench_key );
-			( void )ref_tag;
-
-#if defined( CCP_BENCH_OPENSSL )
-			{
-				EVP_MAC* mac	 = EVP_MAC_fetch( nullptr, "POLY1305", nullptr );
-				EVP_MAC_CTX* ctx = EVP_MAC_CTX_new( mac );
-				std::uint8_t tag[ 16 ];
-				std::size_t tag_len = 16;
-				EVP_MAC_init( ctx, bench_key_bytes, 32, nullptr );
-				EVP_MAC_update( ctx, data.data( ), data.size( ) );
-				EVP_MAC_final( ctx, tag, &tag_len, sizeof( tag ) );
-				EVP_MAC_CTX_free( ctx );
-				EVP_MAC_free( mac );
-				if ( std::memcmp( tag, ref_tag.bytes.data( ), 16 ) != 0 )
-					g_openssl_ok = false;
-			}
-#endif
-
-#if defined( CCP_BENCH_SODIUM )
-			{
-				std::uint8_t tag[ 16 ];
-				crypto_onetimeauth_poly1305( tag, data.data( ), data.size( ), bench_key_bytes );
-				if ( std::memcmp( tag, ref_tag.bytes.data( ), 16 ) != 0 )
-					g_sodium_ok = false;
-			}
-#endif
+			std::uint8_t tag[ 16 ];
+			crypto_onetimeauth_poly1305( tag, data.data( ), data.size( ), bench_key_bytes );
+			if ( std::memcmp( tag, ref_tag.bytes.data( ), 16 ) != 0 )
+				g_sodium_ok = false;
 		}
+#endif
 	}
 }
 
@@ -708,7 +693,7 @@ auto main( int argc, char** argv ) -> int
 				auto cell = []( const result_t& r ) -> std::string {
 					if ( !r.ok )
 						return "unavailable";
-					return fmt_mib( r.mib_per_sec ) + ", " + fmt_time_spread( r );
+					return fmt_mib( r.mib_per_sec ) + ", " + fmt_time( r.ns_per_op );
 				};
 
 				std::string rel = "unmeasured";
@@ -749,11 +734,6 @@ auto main( int argc, char** argv ) -> int
 			}
 		}
 	}
-
-	if ( !g_markdown )
-		std::printf( "\nevery ns/op is the median of %zu repetitions, each repetition times a full batch of ops on a\n"
-					 "monotonic clock, spread = min..max across repetitions\n",
-			reps );
 
 	return 0;
 }

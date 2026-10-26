@@ -1,4 +1,4 @@
-#include "chacha20_poly1305_detail.hxx"
+#include "detail.hxx"
 
 #if defined( CCP_X86_SIMD )
 
